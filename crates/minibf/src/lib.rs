@@ -352,6 +352,10 @@ where
             get(routes::epochs::latest_parameters::<D>),
         )
         .route(
+            "/scripts/{script_hash}",
+            get(routes::scripts::by_script_hash::<D>),
+        )
+        .route(
             "/scripts/datum/{datum_hash}",
             get(routes::scripts::by_datum_hash::<D>),
         )

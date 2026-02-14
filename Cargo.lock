@@ -1329,6 +1329,7 @@ dependencies = [
  "crc",
  "dolos-cardano",
  "dolos-core",
+ "dolos-testing",
  "futures",
  "futures-core",
  "futures-util",

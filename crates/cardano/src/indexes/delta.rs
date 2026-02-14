@@ -11,8 +11,8 @@ use pallas::{
     codec::minicbor,
     ledger::{
         addresses::Address,
-        primitives::conway::DatumOption,
-        traverse::{MultiEraCert, MultiEraInput, MultiEraOutput, MultiEraValue},
+        primitives::conway::{DatumOption, ScriptRef},
+        traverse::{ComputeHash, OriginalHash, MultiEraCert, MultiEraInput, MultiEraOutput, MultiEraValue},
     },
 };
 
@@ -107,6 +107,18 @@ impl CardanoIndexDeltaBuilder {
                 subject.extend(asset.name());
                 tags.push(Tag::new(utxo::ASSET, subject));
             }
+        }
+
+        // Reference script (CIP-33) — index by the script hash (blake2b-224)
+        if let Some(script_ref) = output.script_ref() {
+            let hash_bytes = match script_ref {
+                ScriptRef::NativeScript(ns) => ns.original_hash().to_vec(),
+                ScriptRef::PlutusV1Script(p) => p.compute_hash().to_vec(),
+                ScriptRef::PlutusV2Script(p) => p.compute_hash().to_vec(),
+                ScriptRef::PlutusV3Script(p) => p.compute_hash().to_vec(),
+            };
+
+            tags.push(Tag::new(utxo::REFERENCE_SCRIPT, hash_bytes));
         }
 
         tags
@@ -305,6 +317,7 @@ mod tests {
     use pallas::ledger::addresses::{
         Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
     };
+    use pallas::ledger::primitives::conway::ScriptRef;
 
     fn test_shelley_address() -> Address {
         Address::Shelley(ShelleyAddress::new(
@@ -332,5 +345,49 @@ mod tests {
         assert_eq!(delta.archive[0].tx_hashes.len(), 1);
         // Shelley address produces 3 tags: full, payment, stake
         assert_eq!(delta.archive[0].tags.len(), 3);
+    }
+
+    #[test]
+    fn test_extract_utxo_tags_includes_reference_script() {
+        // load a pre-encoded output CBOR (contains a reference script) provided in test_data
+        let hex = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../minibf/test_data/reference_script_utxo.hex")).trim();
+        let cbor_bytes = hex::decode(hex).expect("invalid hex in test data");
+
+        // the fixture contains a full Conway transaction; decode the tx and
+        // extract the output that contains a reference script
+        let tx = pallas::ledger::traverse::MultiEraTx::decode_for_era(
+            pallas::ledger::traverse::Era::Conway,
+            &cbor_bytes,
+        )
+        .expect("test CBOR must decode to a Conway tx");
+
+        let output = tx
+            .outputs()
+            .into_iter()
+            .find(|o| o.script_ref().is_some())
+            .expect("test tx must contain an output with a script_ref");
+
+        let output_cbor = output.encode();
+        let era_cbor = EraCbor(pallas::ledger::traverse::Era::Conway.into(), output_cbor);
+
+        // compute expected hash from the script_ref inside the output
+        let script_ref = output.script_ref().expect("test CBOR must contain a script_ref");
+        let expected_hash = match &script_ref {
+            ScriptRef::NativeScript(ns) => ns.original_hash().to_vec(),
+            ScriptRef::PlutusV1Script(p) => p.compute_hash().to_vec(),
+            ScriptRef::PlutusV2Script(p) => p.compute_hash().to_vec(),
+            ScriptRef::PlutusV3Script(p) => p.compute_hash().to_vec(),
+        };
+
+        // extract tags from EraCbor and ensure the REFERENCE_SCRIPT tag is present
+        let tags = CardanoIndexDeltaBuilder::extract_tags_from_era_cbor(&era_cbor)
+            .expect("should extract tags");
+
+        let found = tags
+            .into_iter()
+            .find(|t| t.dimension == utxo::REFERENCE_SCRIPT)
+            .expect("REFERENCE_SCRIPT tag should be present");
+
+        assert_eq!(found.key, expected_hash);
     }
 }

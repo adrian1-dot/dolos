@@ -23,6 +23,9 @@ pub mod utxo {
 
     /// Native asset subject (policy ID + asset name)
     pub const ASSET: TagDimension = "asset";
+
+    /// Reference script hash (blake2b-224) stored on UTxOs (CIP-33)
+    pub const REFERENCE_SCRIPT: TagDimension = "reference_script";
 }
 
 /// Archive index dimensions.
