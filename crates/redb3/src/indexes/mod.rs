@@ -1,8 +1,11 @@
+
 //! Index store implementation using Redb v3.
 //!
 //! This module provides the `IndexStore` implementation for Redb, supporting
 //! both UTxO filter indexes (for current state queries) and archive indexes
 //! (for historical queries).
+
+use dolos_core::indexes::ReferenceScriptPointer;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -56,6 +59,9 @@ pub mod utxo_dimensions {
     pub const POLICY: &str = "policy";
     pub const ASSET: &str = "asset";
     pub const REFERENCE_SCRIPT: &str = "reference_script";
+
+    // Table for reference script pointers: script_hash -> (slot, tx_hash, output_index)
+    pub const BY_REFERENCE_SCRIPT_POINTER: &str = "byreference_script_pointer";
 }
 
 /// Archive index dimension constants (must match dolos-cardano dimensions).
@@ -75,6 +81,43 @@ pub mod archive_dimensions {
 pub struct FilterIndexes;
 
 impl FilterIndexes {
+    pub fn insert_reference_script_pointer(
+        wx: &WriteTransaction,
+        script_hash: &[u8],
+        pointer: &ReferenceScriptPointer,
+    ) -> Result<(), Error> {
+        let mut table: redb::MultimapTable<'_, &[u8], &[u8]> = wx.open_multimap_table(MultimapTableDefinition::<&[u8], &[u8]>::new(utxo_dimensions::BY_REFERENCE_SCRIPT_POINTER))?;
+        let pointer_bytes = bincode::serialize(pointer).map_err(|_| Error::CodecError)?;
+        table.insert(script_hash, pointer_bytes.as_slice())?;
+        Ok(())
+    }
+
+    pub fn remove_reference_script_pointer(
+        wx: &WriteTransaction,
+        script_hash: &[u8],
+        pointer: &ReferenceScriptPointer,
+    ) -> Result<(), Error> {
+        let mut table: redb::MultimapTable<'_, &[u8], &[u8]> = wx.open_multimap_table(MultimapTableDefinition::<&[u8], &[u8]>::new(utxo_dimensions::BY_REFERENCE_SCRIPT_POINTER))?;
+        let pointer_bytes = bincode::serialize(pointer).map_err(|_| Error::CodecError)?;
+        // remove the exact entry matching the serialized pointer
+        table.remove(script_hash, pointer_bytes.as_slice())?;
+        Ok(())
+    }
+
+    pub fn get_reference_script_pointers(
+        rx: &ReadTransaction,
+        script_hash: &[u8],
+    ) -> Result<Vec<ReferenceScriptPointer>, Error> {
+        let table: redb::ReadOnlyMultimapTable<&[u8], &[u8]> = rx.open_multimap_table(MultimapTableDefinition::<&[u8], &[u8]>::new(utxo_dimensions::BY_REFERENCE_SCRIPT_POINTER))?;
+        let mut out = Vec::new();
+        for item in table.get(script_hash)? {
+            let item = item?;
+            let pointer: ReferenceScriptPointer = bincode::deserialize(item.value())
+                .map_err(|_| Error::CodecError)?;
+            out.push(pointer);
+        }
+        Ok(out)
+    }
     pub const BY_ADDRESS: MultimapTableDefinition<'static, &'static [u8], UtxosKey> =
         MultimapTableDefinition::new("byaddress");
 
@@ -100,7 +143,7 @@ impl FilterIndexes {
         wx.open_multimap_table(Self::BY_POLICY)?;
         wx.open_multimap_table(Self::BY_ASSET)?;
         wx.open_multimap_table(Self::BY_REFERENCE_SCRIPT)?;
-
+        wx.open_multimap_table(MultimapTableDefinition::<&[u8], &[u8]>::new(utxo_dimensions::BY_REFERENCE_SCRIPT_POINTER))?;
         Ok(())
     }
 
@@ -232,6 +275,12 @@ impl FilterIndexes {
                     }
                     utxo_dimensions::REFERENCE_SCRIPT => {
                         reference_table.insert(tag.key.as_slice(), v)?;
+
+                        // If the tag carries a pointer, also persist it in the
+                        // reference-script pointer multimap (script_hash -> pointer).
+                        if let Some(ptr) = &tag.pointer {
+                            Self::insert_reference_script_pointer(wx, tag.key.as_slice(), ptr)?;
+                        }
                     }
                     _ => {} // Ignore unknown dimensions
                 }
@@ -260,6 +309,13 @@ impl FilterIndexes {
                         asset_table.remove(tag.key.as_slice(), v)?;
                     }
                     utxo_dimensions::REFERENCE_SCRIPT => {
+                        // Remove persisted reference-script pointer (if present) —
+                        // pointer entries are stored separately from the UTxO
+                        // filter index and must be cleaned up on rollback.
+                        if let Some(ptr) = &tag.pointer {
+                            Self::remove_reference_script_pointer(wx, tag.key.as_slice(), ptr)?;
+                        }
+
                         reference_table.remove(tag.key.as_slice(), v)?;
                     }
                     _ => {} // Ignore unknown dimensions
@@ -755,6 +811,11 @@ impl DoubleEndedIterator for SlotIter {
 }
 
 impl CoreIndexStore for IndexStore {
+        /// Query reference script pointers by script hash
+        fn reference_script_pointers(&self, script_hash: &[u8]) -> Result<Vec<ReferenceScriptPointer>, IndexError> {
+            let rx = self.db.begin_read().map_err(map_db_error)?;
+            FilterIndexes::get_reference_script_pointers(&rx, script_hash).map_err(IndexError::from)
+        }
     type Writer = IndexStoreWriter;
     type SlotIter = SlotIter;
 
@@ -862,5 +923,39 @@ impl CoreIndexStore for IndexStore {
         };
 
         Ok(SlotIter { _rx: rx, range })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dolos_core::indexes::ReferenceScriptPointer;
+    use dolos_core::{IndexDelta, TxoRef};
+
+    #[test]
+    fn test_reference_script_pointer_persist_and_query() {
+        // In-memory index store
+        let store = IndexStore::in_memory().expect("create in-memory index store");
+
+        // Build an IndexDelta with a produced UTxO tagged with a reference-script pointer
+        let script_hash = b"\x01\x02\x03\x04".to_vec();
+        let pointer = ReferenceScriptPointer {
+            slot: 42,
+            tx_hash: vec![0x11; 32],
+            output_index: 1,
+        };
+
+        let txo = TxoRef([0xaa; 32].into(), 0);
+        let mut delta = IndexDelta::default();
+        delta.utxo.produced.push((txo, vec![Tag::with_pointer(utxo_dimensions::REFERENCE_SCRIPT, script_hash.clone(), pointer.clone())]));
+
+        // Apply delta via writer
+        let writer = store.start_writer().unwrap();
+        writer.apply(&delta).unwrap();
+        writer.commit().unwrap();
+
+        // Query pointers
+        let pointers = store.reference_script_pointers(&script_hash).unwrap();
+        assert!(pointers.contains(&pointer));
     }
 }

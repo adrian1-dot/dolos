@@ -1,6 +1,14 @@
 use dolos_core::{BlockBody, BlockHash, BlockSlot, EraCbor, RawBlock, RawUtxoMap, TxoRef};
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraOutput};
 use self_cell::self_cell;
+
+/// Context for locating an output in the archive (for reference script pointer).
+#[derive(Debug, Clone)]
+pub struct OutputPointerContext {
+    pub slot: BlockSlot,
+    pub tx_hash: Vec<u8>,
+    pub output_index: u32,
+}
 use std::sync::Arc;
 
 self_cell!(
@@ -40,6 +48,7 @@ impl dolos_core::Block for OwnedMultiEraBlock {
     }
 }
 
+
 self_cell!(
     pub struct OwnedMultiEraOutput {
         owner: Arc<EraCbor>,
@@ -48,6 +57,39 @@ self_cell!(
         dependent: MultiEraOutput,
     }
 );
+
+impl OwnedMultiEraOutput {
+    // Optionally store pointer context for this output
+    pub fn with_pointer_context(self, context: OutputPointerContext) -> OwnedMultiEraOutputWithContext {
+        OwnedMultiEraOutputWithContext {
+            output: self,
+            context: Some(context),
+        }
+    }
+}
+
+/// Wrapper for OwnedMultiEraOutput with optional pointer context
+pub struct OwnedMultiEraOutputWithContext {
+    pub output: OwnedMultiEraOutput,
+    pub context: Option<OutputPointerContext>,
+}
+
+impl std::fmt::Debug for OwnedMultiEraOutputWithContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnedMultiEraOutputWithContext")
+            .field("context", &self.context)
+            .finish()
+    }
+}
+
+impl OwnedMultiEraOutputWithContext {
+    pub fn pointer_context(&self) -> Option<(BlockSlot, Vec<u8>, u32)> {
+        self.context.as_ref().map(|ctx| (ctx.slot, ctx.tx_hash.clone(), ctx.output_index))
+    }
+    pub fn inner(&self) -> &OwnedMultiEraOutput {
+        &self.output
+    }
+}
 
 impl OwnedMultiEraOutput {
     pub fn decode(buf: Arc<EraCbor>) -> Result<Self, pallas::ledger::traverse::Error> {

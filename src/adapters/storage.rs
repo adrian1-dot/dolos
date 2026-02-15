@@ -971,6 +971,14 @@ impl CoreIndexStore for IndexStoreBackend {
         }
     }
 
+    fn reference_script_pointers(&self, script_hash: &[u8]) -> Result<Vec<dolos_core::ReferenceScriptPointer>, IndexError> {
+        match self {
+            Self::Redb(s) => s.reference_script_pointers(script_hash),
+            Self::Fjall(s) => s.reference_script_pointers(script_hash),
+            Self::NoOp(s) => s.reference_script_pointers(script_hash),
+        }
+    }
+
     fn slots_by_tag(
         &self,
         dimension: TagDimension,

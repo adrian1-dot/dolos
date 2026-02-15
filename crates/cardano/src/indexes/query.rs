@@ -1,6 +1,19 @@
-//!
-//! Cardano-specific async query helpers for `AsyncQueryFacade`.
+use dolos_core::indexes::ReferenceScriptPointer;
+// use crate::Domain; // Removed duplicate import
 
+/// Extension trait for pointer-based reference script retrieval.
+#[allow(dead_code)]
+pub trait ReferenceScriptQueryExt<D: Domain> {
+    /// Given a script hash, return all pointers (slot, tx hash, output index) for that script.
+    fn reference_script_pointers(&self, script_hash: &[u8]) -> Result<Vec<ReferenceScriptPointer>, dolos_core::indexes::IndexError>;
+}
+
+impl<D: Domain> ReferenceScriptQueryExt<D> for D {
+    fn reference_script_pointers(&self, script_hash: &[u8]) -> Result<Vec<ReferenceScriptPointer>, dolos_core::indexes::IndexError> {
+        self.indexes().reference_script_pointers(script_hash)
+    }
+}
+/// Cardano-specific async query helpers for `AsyncQueryFacade`.
 use pallas::{
     crypto::hash::Hash,
     ledger::{

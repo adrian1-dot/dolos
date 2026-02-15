@@ -21,14 +21,23 @@ use crate::{BlockSlot, ChainPoint, TxoRef, UtxoSet};
 /// Each dimension corresponds to a separate index table in the storage backend.
 pub type TagDimension = &'static str;
 
+/// A pointer to a reference script in the archive.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ReferenceScriptPointer {
+    pub slot: BlockSlot,
+    pub tx_hash: Vec<u8>,
+    pub output_index: u32,
+}
+
 /// A tag associating data with a dimension.
 ///
-/// Tags are the fundamental unit of indexing. They associate an entity
-/// (block, transaction, or UTxO) with a searchable key within a dimension.
+/// For most dimensions, `key` is a simple value (e.g., address, asset).
+/// For `REFERENCE_SCRIPT`, `key` is the script hash, and `pointer` is Some(pointer).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tag {
     pub dimension: TagDimension,
     pub key: Vec<u8>,
+    pub pointer: Option<ReferenceScriptPointer>,
 }
 
 impl Tag {
@@ -36,6 +45,15 @@ impl Tag {
         Self {
             dimension,
             key: key.into(),
+            pointer: None,
+        }
+    }
+
+    pub fn with_pointer(dimension: TagDimension, key: impl Into<Vec<u8>>, pointer: ReferenceScriptPointer) -> Self {
+        Self {
+            dimension,
+            key: key.into(),
+            pointer: Some(pointer),
         }
     }
 }
@@ -138,6 +156,8 @@ pub trait IndexWriter: Send + Sync + 'static {
 /// Chain-specific code should provide extension traits with convenient methods.
 #[trait_variant::make(Send)]
 pub trait IndexStore: Clone + Send + Sync + 'static {
+        /// Query reference script pointers by script hash (for pointer-based reference script lookup)
+        fn reference_script_pointers(&self, script_hash: &[u8]) -> Result<Vec<ReferenceScriptPointer>, IndexError>;
     /// Writer type for batched write operations.
     type Writer: IndexWriter;
 

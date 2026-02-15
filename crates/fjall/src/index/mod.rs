@@ -354,4 +354,58 @@ impl CoreIndexStore for IndexStore {
         // Pass dimension string directly - chain-agnostic
         SlotIter::new(&snapshot, &self.tags, dimension, key, start, end).map_err(IndexError::from)
     }
+
+    /// Query reference script pointers by script hash
+    fn reference_script_pointers(&self, script_hash: &[u8]) -> Result<Vec<dolos_core::indexes::ReferenceScriptPointer>, dolos_core::indexes::IndexError> {
+        use tag_keys::{build_pointer_entry_prefix, decode_pointer_bytes_from_key};
+
+        let snapshot = self.db.snapshot();
+        let mut out = Vec::new();
+
+        // Scan the tags keyspace for pointer entries that were stored under the
+        // dedicated "reference_script_pointer" dimension.
+        let prefix = build_pointer_entry_prefix("reference_script_pointer", script_hash);
+        for guard in snapshot.prefix(&self.tags, prefix) {
+            let key = guard.key().map_err(crate::Error::from)?;
+            let pointer_bytes = decode_pointer_bytes_from_key(&key, script_hash.len());
+            let ptr: dolos_core::indexes::ReferenceScriptPointer = bincode::deserialize(pointer_bytes)
+                .map_err(|e| dolos_core::indexes::IndexError::CodecError(e.to_string()))?;
+            out.push(ptr);
+        }
+
+        Ok(out)
+    }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dolos_core::{IndexDelta, TxoRef};
+    use dolos_core::indexes::ReferenceScriptPointer;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_reference_script_pointer_persist_and_query_fjall() {
+        let dir = tempdir().unwrap();
+        let config = FjallIndexConfig::default();
+        let store = IndexStore::open(dir.path(), &config).expect("open fjall index store");
+
+        // Build an IndexDelta with a produced UTxO tagged with a reference-script pointer
+        let script_hash = b"\x0a\x0b\x0c\x0d".to_vec();
+        let pointer = ReferenceScriptPointer { slot: 9001, tx_hash: vec![0x22; 32], output_index: 3 };
+
+        let txo = TxoRef([0xab; 32].into(), 0);
+        let mut delta = IndexDelta::default();
+        delta.utxo.produced.push((txo, vec![dolos_core::indexes::Tag::with_pointer("reference_script", script_hash.clone(), pointer.clone())]));
+
+        // Apply and commit
+        let writer = store.start_writer().unwrap();
+        writer.apply(&delta).unwrap();
+        writer.commit().unwrap();
+
+        // Query the pointers
+        let pointers = store.reference_script_pointers(&script_hash).unwrap();
+        assert!(pointers.contains(&pointer));
+    }
+}
+

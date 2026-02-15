@@ -36,6 +36,10 @@ pub enum Error {
     #[error("invalid operation")]
     InvalidOperation,
 
+
+    #[error("codec error")]
+    CodecError,
+
     #[error("archive error: {0}")]
     ArchiveError(String),
 

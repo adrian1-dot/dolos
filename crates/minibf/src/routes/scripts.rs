@@ -4,7 +4,7 @@ use axum::{
 };
 use blockfrost_openapi::models::script_datum::ScriptDatum;
 use dolos_cardano::indexes::AsyncCardanoQueryExt;
-use dolos_core::{Domain, IndexStore, StateStore};
+use dolos_core::{Domain, IndexStore, StateStore, ArchiveStore};
 use pallas::crypto::hash::Hash;
 use reqwest::StatusCode;
 
@@ -58,45 +58,82 @@ where
 
     let key = hex::decode(&script_hash).map_err(|_| StatusCode::NOT_FOUND)?;
 
-    // find any UTxO that references this script hash
-    let utxos = domain
+    // Try to find pointer(s) for this script hash
+    let pointers = domain
         .indexes()
-        .utxos_by_tag(dolos_cardano::indexes::utxo_dimensions::REFERENCE_SCRIPT, &key)
+        .reference_script_pointers(&key)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let txoref = utxos.into_iter().next().ok_or(StatusCode::NOT_FOUND)?;
+    let pointer = pointers.into_iter().next().ok_or(StatusCode::NOT_FOUND)?;
 
-    // load the UTxO and extract the script_ref
-    let utxos_map = domain
-        .state()
-        .get_utxos(vec![txoref.clone()])
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Try to load from state first
+let tx_hash = Hash::<32>::from(pointer.tx_hash.as_slice());
+        let txoref = dolos_core::TxoRef(tx_hash, pointer.output_index);
+        let utxos_map = domain
+            .state()
+            .get_utxos(vec![txoref.clone()])
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let era_cbor = utxos_map.get(&txoref).ok_or(StatusCode::NOT_FOUND)?;
-
-    let output = pallas::ledger::traverse::MultiEraOutput::try_from(era_cbor.as_ref())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let script_ref = output.script_ref().ok_or(StatusCode::NOT_FOUND)?;
-
-    // determine type & serialised size
+// determine type & serialised size by inspecting either the state UTxO or
+    // the archived block (decoded). We compute `typ` and `size` here so we
+    // avoid returning references into temporaries.
     use pallas::codec::minicbor;
     use pallas::ledger::primitives::conway::ScriptRef as PScriptRef;
 
-    let (typ, size) = match script_ref {
-        PScriptRef::NativeScript(ns) => ("native", ns.raw_cbor().len()),
-        PScriptRef::PlutusV1Script(p) => (
-            "plutusV1",
-            minicbor::to_vec(&p).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.len(),
-        ),
-        PScriptRef::PlutusV2Script(p) => (
-            "plutusV2",
-            minicbor::to_vec(&p).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.len(),
-        ),
-        PScriptRef::PlutusV3Script(p) => (
-            "plutusV3",
-            minicbor::to_vec(&p).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.len(),
-        ),
+    let (typ, size) = if let Some(era_cbor) = utxos_map.get(&txoref) {
+        let output = pallas::ledger::traverse::MultiEraOutput::try_from(era_cbor.as_ref())
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        match output.script_ref() {
+            Some(PScriptRef::NativeScript(ns)) => ("native", ns.raw_cbor().len()),
+            Some(PScriptRef::PlutusV1Script(p)) => (
+                "plutusV1",
+                minicbor::to_vec(&p).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.len(),
+            ),
+            Some(PScriptRef::PlutusV2Script(p)) => (
+                "plutusV2",
+                minicbor::to_vec(&p).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.len(),
+            ),
+            Some(PScriptRef::PlutusV3Script(p)) => (
+                "plutusV3",
+                minicbor::to_vec(&p).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.len(),
+            ),
+            None => return Err(StatusCode::NOT_FOUND.into()),
+        }
+    } else {
+        let raw_block = domain
+            .archive()
+            .get_block_by_slot(&pointer.slot)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        let block = pallas::ledger::traverse::MultiEraBlock::decode(&raw_block)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let txs = block.txs();
+        let tx = txs
+            .iter()
+            .find(|tx: &&pallas::ledger::traverse::MultiEraTx| tx.hash().to_vec() == pointer.tx_hash)
+            .ok_or(StatusCode::NOT_FOUND)?;
+        let outputs = tx.outputs();
+        let output = outputs
+            .get(pointer.output_index as usize)
+            .ok_or(StatusCode::NOT_FOUND)?;
+
+        match output.script_ref() {
+            Some(PScriptRef::NativeScript(ns)) => ("native", ns.raw_cbor().len()),
+            Some(PScriptRef::PlutusV1Script(p)) => (
+                "plutusV1",
+                minicbor::to_vec(&p).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.len(),
+            ),
+            Some(PScriptRef::PlutusV2Script(p)) => (
+                "plutusV2",
+                minicbor::to_vec(&p).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.len(),
+            ),
+            Some(PScriptRef::PlutusV3Script(p)) => (
+                "plutusV3",
+                minicbor::to_vec(&p).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.len(),
+            ),
+            None => return Err(StatusCode::NOT_FOUND.into()),
+        }
     };
 
     let resp = serde_json::json!({
@@ -173,7 +210,7 @@ mod tests {
             .state()
             .get_utxos(vec![txoref.clone()])
             .expect("state.get_utxos failed");
-        assert!(utxos_map.get(&txoref).is_some(), "UTxO not present in state");
+        assert!(utxos_map.contains_key(&txoref), "UTxO not present in state");
 
         let cfg = MinibfConfig {
             listen_address: "[::]:0".parse().unwrap(),

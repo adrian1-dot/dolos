@@ -66,6 +66,9 @@ impl DoubleEndedIterator for EmptySlotIter {
 }
 
 impl IndexStore for NoOpIndexStore {
+        fn reference_script_pointers(&self, _script_hash: &[u8]) -> Result<Vec<crate::indexes::ReferenceScriptPointer>, crate::indexes::IndexError> {
+            Ok(Vec::new())
+        }
     type Writer = NoOpIndexWriter;
     type SlotIter = EmptySlotIter;
 

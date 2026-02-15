@@ -334,9 +334,16 @@ impl Genesis {
         hasher.input(&shelley_bytes);
         let shelley_hash = hasher.finalize();
 
+        eprintln!("loading genesis file: byron='{}'", byron.as_ref().display());
         let byron = pallas::ledger::configs::byron::from_file(byron.as_ref())?;
+
+        eprintln!("loading genesis file: shelley='{}'", shelley.as_ref().display());
         let shelley = pallas::ledger::configs::shelley::from_file(shelley.as_ref())?;
+
+        eprintln!("loading genesis file: alonzo='{}'", alonzo.as_ref().display());
         let alonzo = pallas::ledger::configs::alonzo::from_file(alonzo.as_ref())?;
+
+        eprintln!("loading genesis file: conway='{}'", conway.as_ref().display());
         let conway = pallas::ledger::configs::conway::from_file(conway.as_ref())?;
 
         Ok(Self {

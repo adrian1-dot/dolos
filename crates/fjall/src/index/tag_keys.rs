@@ -45,6 +45,29 @@ pub fn build_utxo_tag_prefix(dimension: &str, lookup_key: &[u8]) -> Vec<u8> {
     prefix
 }
 
+/// Build a key for storing a `ReferenceScriptPointer` in the tags keyspace.
+///
+/// Key format: `[dim_hash:8][lookup_key:var][pointer_bytes:var]` — the pointer
+/// bytes are the bincode-serialized `ReferenceScriptPointer`.
+pub fn build_pointer_entry_key(dimension: &str, lookup_key: &[u8], pointer_bytes: &[u8]) -> Vec<u8> {
+    let dim_hash = hash_dimension(dim_prefix::UTXO, dimension);
+    let mut key = Vec::with_capacity(DIM_HASH_SIZE + lookup_key.len() + pointer_bytes.len());
+    key.extend_from_slice(&dim_hash);
+    key.extend_from_slice(lookup_key);
+    key.extend_from_slice(pointer_bytes);
+    key
+}
+
+/// Build prefix for pointer entry queries: `[dim_hash:8][lookup_key:var]`
+pub fn build_pointer_entry_prefix(dimension: &str, lookup_key: &[u8]) -> Vec<u8> {
+    build_utxo_tag_prefix(dimension, lookup_key)
+}
+
+/// Decode pointer bytes from a pointer entry key given the lookup key length.
+pub fn decode_pointer_bytes_from_key(key: &[u8], lookup_key_len: usize) -> &[u8] {
+    &key[DIM_HASH_SIZE + lookup_key_len..]
+}
+
 /// Decode TxoRef from UTxO tag key (last 36 bytes)
 pub fn decode_utxo_tag_txo(key: &[u8]) -> TxoRef {
     debug_assert!(key.len() >= DIM_HASH_SIZE + TXO_REF_SIZE);
@@ -192,5 +215,21 @@ mod tests {
         // Keys should be valid sizes
         assert!(key1.len() > DIM_HASH_SIZE);
         assert_eq!(key2.len(), BLOCK_TAG_KEY_SIZE);
+    }
+
+    #[test]
+    fn test_pointer_entry_key_roundtrip() {
+        let lookup_key = b"script_hash_bytes";
+        let pointer = dolos_core::indexes::ReferenceScriptPointer { slot: 1, tx_hash: vec![0u8;32], output_index: 2 };
+        let pointer_bytes = bincode::serialize(&pointer).unwrap();
+        let key = build_pointer_entry_key("reference_script_pointer", lookup_key, &pointer_bytes);
+
+        // Key should start with the same prefix as a normal UTxO prefix for the same dimension+lookup
+        let prefix = build_pointer_entry_prefix("reference_script_pointer", lookup_key);
+        assert!(key.starts_with(&prefix));
+
+        // Decoding pointer bytes should yield the original bytes
+        let recovered = decode_pointer_bytes_from_key(&key, lookup_key.len());
+        assert_eq!(recovered, pointer_bytes.as_slice());
     }
 }

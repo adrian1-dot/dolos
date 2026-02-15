@@ -310,6 +310,7 @@ impl WorkBatch {
     /// CardanoIndexDeltaBuilder.
     pub fn build_index_delta(&self) -> IndexDelta {
         use pallas::ledger::traverse::{MultiEraBlock, MultiEraOutput};
+        use crate::owned::{OwnedMultiEraOutputWithContext, OutputPointerContext};
 
         let mut builder = CardanoIndexDeltaBuilder::new(self.last_point());
 
@@ -329,29 +330,70 @@ impl WorkBatch {
             if let Some(utxo_delta) = &work_block.utxo_delta {
                 // Produced UTxOs
                 for (txo_ref, body) in &utxo_delta.produced_utxo {
-                    if let Ok(output) = MultiEraOutput::try_from(body.as_ref()) {
-                        builder.add_produced_utxo(txo_ref.clone(), &output);
+                    if let Ok(_output) = MultiEraOutput::try_from(body.as_ref()) {
+                        // pointer context: slot, tx hash, output index
+                        let pointer = OutputPointerContext {
+                            slot: point.slot(),
+                            tx_hash: txo_ref.0.to_vec(),
+                            output_index: txo_ref.1,
+                        };
+                        let wrapped = OwnedMultiEraOutputWithContext {
+                            output: crate::OwnedMultiEraOutput::decode(body.clone()).expect("decode output"),
+                            context: Some(pointer),
+                        };
+                        builder.add_produced_utxo_with_context(txo_ref.clone(), &wrapped);
                     }
                 }
 
                 // Consumed UTxOs
                 for (txo_ref, body) in &utxo_delta.consumed_utxo {
-                    if let Ok(output) = MultiEraOutput::try_from(body.as_ref()) {
-                        builder.add_consumed_utxo(txo_ref.clone(), &output);
+                    if let Ok(_output) = MultiEraOutput::try_from(body.as_ref()) {
+                        let pointer = OutputPointerContext {
+                            slot: point.slot(),
+                            tx_hash: txo_ref.0.to_vec(),
+                            output_index: txo_ref.1,
+                        };
+                        let wrapped = OwnedMultiEraOutputWithContext {
+                            output: crate::OwnedMultiEraOutput::decode(body.clone()).expect("decode output"),
+                            context: Some(pointer),
+                        };
+                        wrapped.output.with_dependent(|_, out| {
+                            builder.add_consumed_utxo(txo_ref.clone(), out);
+                        });
                     }
                 }
 
                 // Recovered stxis (for rollback support)
                 for (txo_ref, body) in &utxo_delta.recovered_stxi {
-                    if let Ok(output) = MultiEraOutput::try_from(body.as_ref()) {
-                        builder.add_produced_utxo(txo_ref.clone(), &output);
+                    if let Ok(_output) = MultiEraOutput::try_from(body.as_ref()) {
+                        let pointer = OutputPointerContext {
+                            slot: point.slot(),
+                            tx_hash: txo_ref.0.to_vec(),
+                            output_index: txo_ref.1,
+                        };
+                        let wrapped = OwnedMultiEraOutputWithContext {
+                            output: crate::OwnedMultiEraOutput::decode(body.clone()).expect("decode output"),
+                            context: Some(pointer),
+                        };
+                        builder.add_produced_utxo_with_context(txo_ref.clone(), &wrapped);
                     }
                 }
 
                 // Undone UTxOs (for rollback support)
                 for (txo_ref, body) in &utxo_delta.undone_utxo {
-                    if let Ok(output) = MultiEraOutput::try_from(body.as_ref()) {
-                        builder.add_consumed_utxo(txo_ref.clone(), &output);
+                    if let Ok(_output) = MultiEraOutput::try_from(body.as_ref()) {
+                        let pointer = OutputPointerContext {
+                            slot: point.slot(),
+                            tx_hash: txo_ref.0.to_vec(),
+                            output_index: txo_ref.1,
+                        };
+                        let wrapped = OwnedMultiEraOutputWithContext {
+                            output: crate::OwnedMultiEraOutput::decode(body.clone()).expect("decode output"),
+                            context: Some(pointer),
+                        };
+                        wrapped.output.with_dependent(|_, out| {
+                            builder.add_consumed_utxo(txo_ref.clone(), out);
+                        });
                     }
                 }
             }

@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use dolos_core::{IndexDelta, TxoRef, UtxoSet};
 use fjall::{Keyspace, OwnedWriteBatch, Readable};
 
-use super::tag_keys::{build_utxo_tag_key, build_utxo_tag_prefix, decode_utxo_tag_txo};
+use super::tag_keys::{build_utxo_tag_key, build_utxo_tag_prefix, decode_utxo_tag_txo, build_pointer_entry_key};
 use crate::keys::{DIM_HASH_SIZE, TXO_REF_SIZE};
 use crate::Error;
 
@@ -41,6 +41,32 @@ fn remove_entry(
     batch.remove(tags_keyspace, key);
 }
 
+/// Insert a `ReferenceScriptPointer` entry into the tags keyspace under
+/// a dedicated pointer-dimension. The key format is documented in
+/// `tag_keys::build_pointer_entry_key` and the value is empty.
+fn insert_pointer_entry(
+    batch: &mut OwnedWriteBatch,
+    tags_keyspace: &Keyspace,
+    dimension: &str,
+    lookup_key: &[u8],
+    pointer_bytes: &[u8],
+) {
+    let key = build_pointer_entry_key(dimension, lookup_key, pointer_bytes);
+    batch.insert(tags_keyspace, key, []);
+}
+
+/// Remove a previously inserted pointer entry.
+fn remove_pointer_entry(
+    batch: &mut OwnedWriteBatch,
+    tags_keyspace: &Keyspace,
+    dimension: &str,
+    lookup_key: &[u8],
+    pointer_bytes: &[u8],
+) {
+    let key = build_pointer_entry_key(dimension, lookup_key, pointer_bytes);
+    batch.remove(tags_keyspace, key);
+}
+
 /// Apply UTxO tag changes from an IndexDelta to the tags keyspace
 pub fn apply(
     batch: &mut OwnedWriteBatch,
@@ -51,6 +77,15 @@ pub fn apply(
     for (txo_ref, tags) in &delta.utxo.produced {
         for tag in tags {
             insert_entry(batch, tags_keyspace, tag.dimension, &tag.key, txo_ref);
+
+            // Persist reference-script pointer entries (if present) under a
+            // dedicated dimension so they can be queried efficiently.
+            if tag.dimension == "reference_script" {
+                if let Some(ptr) = &tag.pointer {
+                    let pointer_bytes = bincode::serialize(ptr).map_err(|e| Error::Codec(e.to_string()))?;
+                    insert_pointer_entry(batch, tags_keyspace, "reference_script_pointer", &tag.key, &pointer_bytes);
+                }
+            }
         }
     }
 
@@ -73,6 +108,14 @@ pub fn undo(
     // Remove produced UTxOs (undo insertion)
     for (txo_ref, tags) in &delta.utxo.produced {
         for tag in tags {
+            // Remove pointer entries if present
+            if tag.dimension == "reference_script" {
+                if let Some(ptr) = &tag.pointer {
+                    let pointer_bytes = bincode::serialize(ptr).map_err(|e| Error::Codec(e.to_string()))?;
+                    remove_pointer_entry(batch, tags_keyspace, "reference_script_pointer", &tag.key, &pointer_bytes);
+                }
+            }
+
             remove_entry(batch, tags_keyspace, tag.dimension, &tag.key, txo_ref);
         }
     }
@@ -81,6 +124,14 @@ pub fn undo(
     for (txo_ref, tags) in &delta.utxo.consumed {
         for tag in tags {
             insert_entry(batch, tags_keyspace, tag.dimension, &tag.key, txo_ref);
+
+            // If a consumed tag carried a pointer (rare), restore it as well
+            if tag.dimension == "reference_script" {
+                if let Some(ptr) = &tag.pointer {
+                    let pointer_bytes = bincode::serialize(ptr).map_err(|e| Error::Codec(e.to_string()))?;
+                    insert_pointer_entry(batch, tags_keyspace, "reference_script_pointer", &tag.key, &pointer_bytes);
+                }
+            }
         }
     }
 
