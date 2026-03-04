@@ -627,6 +627,8 @@ pub struct MinibfConfig {
     pub token_registry_url: Option<String>,
     pub url: Option<String>,
     pub max_scan_items: Option<u64>,
+    /// Optional base path to prefix all API routes (e.g., "/api/v0").
+    pub base_path: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]

@@ -278,11 +278,16 @@ where
     Option<EpochState>: From<D::Entity>,
     Option<DRepState>: From<D::Entity>,
 {
-    build_router_with_facade(Facade::<D> {
+    let router = build_router_with_facade(Facade::<D> {
         inner: domain,
-        config: cfg,
+        config: cfg.clone(),
         cache: cache::CacheService::default(),
-    })
+    });
+    if let Some(ref base_path) = cfg.base_path {
+        Router::new().nest(base_path, router)
+    } else {
+        router
+    }
 }
 
 pub(crate) fn build_router_with_facade<D>(facade: Facade<D>) -> Router

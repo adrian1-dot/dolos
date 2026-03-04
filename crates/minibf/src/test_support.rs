@@ -119,6 +119,7 @@ impl TestApp {
             token_registry_url: None,
             url: None,
             max_scan_items: None,
+            base_path: None,
         };
 
         let facade = Facade {

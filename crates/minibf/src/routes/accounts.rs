@@ -128,6 +128,7 @@ impl<'a> IntoModel<AccountContent> for AccountModelBuilder<'a> {
             withdrawable_amount: stake.withdrawable().to_string(),
             pool_id,
             drep_id,
+            registered: false,
         };
 
         Ok(out)
