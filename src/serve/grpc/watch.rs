@@ -176,12 +176,53 @@ fn fill_input_as_output<D: Domain + LedgerContext>(
     }
 }
 
+// Hydrates each reference input's `as_output` field by looking up the UTxOs
+// from the state store. Reference inputs are not consumed (not in the WAL),
+// so we query the state store directly.
+fn fill_ref_input_as_output<D: Domain + LedgerContext>(
+    tx: &mut u5c::cardano::Tx,
+    mapper: &interop::Mapper<D>,
+    domain: &D,
+) {
+    let refs: Vec<TxoRef> = tx
+        .reference_inputs
+        .iter()
+        .filter_map(|input| {
+            let hash: [u8; 32] = input.tx_hash.as_ref().try_into().ok()?;
+            Some(TxoRef(TxHash::from(hash), input.output_index as TxoIdx))
+        })
+        .collect();
+
+    if refs.is_empty() {
+        return;
+    }
+
+    let utxos = match domain.state().get_utxos(refs) {
+        Ok(u) => u,
+        Err(_) => return,
+    };
+
+    for input in tx.reference_inputs.iter_mut() {
+        let hash: [u8; 32] = match input.tx_hash.as_ref().try_into() {
+            Ok(x) => x,
+            Err(_) => continue,
+        };
+        let txo_ref = TxoRef(TxHash::from(hash), input.output_index as TxoIdx);
+        if let Some(era_cbor) = utxos.get(&txo_ref) {
+            if let Ok(output) = MultiEraOutput::try_from(era_cbor.as_ref()) {
+                input.as_output = Some(mapper.map_tx_output(&output, None));
+            }
+        }
+    }
+}
+
 fn block_to_txs<C: LedgerContext + Domain>(
     block: &RawBlock,
     mapper: &interop::Mapper<C>,
     request: &u5c::watch::WatchTxRequest,
     // Pre-resolved inputs from the WAL LogValue for this block.
     wal_inputs: &HashMap<TxoRef, Arc<EraCbor>>,
+    domain: &C,
 ) -> Vec<u5c::watch::AnyChainTx> {
     // RawBlock is Arc<BlockBody> = Arc<Vec<u8>>; deref to get the byte slice.
     let body: &[u8] = block.as_ref();
@@ -199,6 +240,7 @@ fn block_to_txs<C: LedgerContext + Domain>(
         })
         .map(|mut tx| {
             fill_input_as_output(&mut tx, mapper, wal_inputs);
+            fill_ref_input_as_output(&mut tx, mapper, domain);
             tx
         })
         .map(|x| u5c::watch::AnyChainTx {
@@ -245,7 +287,7 @@ fn roll_to_watch_response<C: LedgerContext + Domain>(
     let txs: Vec<_> = match log {
         TipEvent::Apply(point, block) => {
             let wal_inputs = wal_inputs_for(domain, point);
-            block_to_txs(block, mapper, request, &wal_inputs)
+            block_to_txs(block, mapper, request, &wal_inputs, domain)
                 .into_iter()
                 .map(u5c::watch::watch_tx_response::Action::Apply)
                 .map(|x| u5c::watch::WatchTxResponse { action: Some(x) })
@@ -253,7 +295,7 @@ fn roll_to_watch_response<C: LedgerContext + Domain>(
         }
         TipEvent::Undo(point, block) => {
             let wal_inputs = wal_inputs_for(domain, point);
-            block_to_txs(block, mapper, request, &wal_inputs)
+            block_to_txs(block, mapper, request, &wal_inputs, domain)
                 .into_iter()
                 .map(u5c::watch::watch_tx_response::Action::Undo)
                 .map(|x| u5c::watch::WatchTxResponse { action: Some(x) })
