@@ -316,6 +316,21 @@ All agents working on this repository must verify their modifications by running
    cargo test --workspace --all-features
    ```
 
+### Git Workflow
+
+**Before committing on any branch**, ensure local `main` is not behind `origin/main`. A stale local main causes PRs to show unrelated commits in their diff.
+
+```bash
+git checkout main && git pull --ff-only
+git checkout - && git rebase origin/main
+```
+
+A pre-push hook enforcing this lives in `.githooks/pre-push`. Activate once per checkout:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ### Code Quality Standards
 
 - All warnings from `cargo clippy` must be resolved before committing changes
