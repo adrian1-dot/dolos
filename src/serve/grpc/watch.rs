@@ -162,8 +162,11 @@ fn apply_predicate(predicate: &u5c::watch::TxPredicate, tx: &u5c::cardano::Tx) -
 fn fill_input_as_output<D: Domain + LedgerContext>(
     tx: &mut u5c::cardano::Tx,
     mapper: &interop::Mapper<D>,
+    domain: &D,
     wal_inputs: &HashMap<TxoRef, Arc<EraCbor>>,
 ) {
+    let mut output_cache: HashMap<TxoRef, Option<u5c::cardano::TxOutput>> = HashMap::new();
+
     for input in tx.inputs.iter_mut() {
         let hash: [u8; 32] = match input.tx_hash.as_ref().try_into() {
             Ok(x) => x,
@@ -172,18 +175,50 @@ fn fill_input_as_output<D: Domain + LedgerContext>(
 
         let txo_ref = TxoRef(TxHash::from(hash), input.output_index as TxoIdx);
 
-        if let Some(era_cbor) = wal_inputs.get(&txo_ref) {
-            if let Ok(output) = MultiEraOutput::try_from(era_cbor.as_ref()) {
-                input.as_output = Some(mapper.map_tx_output(&output, None));
-            }
+        if let Some(cached) = output_cache.get(&txo_ref) {
+            input.as_output = cached.clone();
+            continue;
         }
+
+        let resolved = wal_inputs
+            .get(&txo_ref)
+            .and_then(|era_cbor| MultiEraOutput::try_from(era_cbor.as_ref()).ok())
+            .map(|output| mapper.map_tx_output(&output, None))
+            .or_else(|| archive_output_for_input(domain, mapper, &txo_ref));
+
+        input.as_output = resolved.clone();
+        output_cache.insert(txo_ref, resolved);
     }
+}
+
+fn archive_output_for_input<D: Domain + LedgerContext>(
+    domain: &D,
+    mapper: &interop::Mapper<D>,
+    txo_ref: &TxoRef,
+) -> Option<u5c::cardano::TxOutput> {
+    let slot = domain
+        .indexes()
+        .slot_by_tx_hash(txo_ref.0.as_slice())
+        .ok()
+        .flatten()?;
+
+    let raw = domain.archive().get_block_by_slot(&slot).ok().flatten()?;
+    let block = MultiEraBlock::decode(raw.as_slice()).ok()?;
+    let txs = block.txs();
+    let tx = txs
+        .iter()
+        .find(|tx| tx.hash().as_slice() == txo_ref.0.as_slice())?;
+    let outputs = tx.outputs();
+    let output = outputs.get(txo_ref.1 as usize)?;
+
+    Some(mapper.map_tx_output(output, None))
 }
 
 fn block_to_txs<C: LedgerContext + Domain>(
     block: &RawBlock,
     mapper: &interop::Mapper<C>,
     request: &u5c::watch::WatchTxRequest,
+    domain: &C,
     // Pre-resolved inputs from the WAL LogValue for this block.
     wal_inputs: &HashMap<TxoRef, Arc<EraCbor>>,
 ) -> Vec<u5c::watch::AnyChainTx> {
@@ -202,7 +237,7 @@ fn block_to_txs<C: LedgerContext + Domain>(
                 .is_none_or(|predicate| apply_predicate(predicate, tx))
         })
         .map(|mut tx| {
-            fill_input_as_output(&mut tx, mapper, wal_inputs);
+            fill_input_as_output(&mut tx, mapper, domain, wal_inputs);
             tx
         })
         .map(|x| u5c::watch::AnyChainTx {
@@ -220,10 +255,7 @@ fn block_to_txs<C: LedgerContext + Domain>(
 // Fetches the pre-resolved inputs map from the WAL for a given ChainPoint.
 // Returns an empty map if the entry is missing or the WAL read fails, so
 // callers get `as_output: None` for all inputs rather than a hard error.
-fn wal_inputs_for<D: Domain>(
-    domain: &D,
-    point: &ChainPoint,
-) -> HashMap<TxoRef, Arc<EraCbor>> {
+fn wal_inputs_for<D: Domain>(domain: &D, point: &ChainPoint) -> HashMap<TxoRef, Arc<EraCbor>> {
     domain
         .wal()
         .read_entry(point)
@@ -249,7 +281,7 @@ fn roll_to_watch_response<C: LedgerContext + Domain>(
     let txs: Vec<_> = match log {
         TipEvent::Apply(point, block) => {
             let wal_inputs = wal_inputs_for(domain, point);
-            block_to_txs(block, mapper, request, &wal_inputs)
+            block_to_txs(block, mapper, request, domain, &wal_inputs)
                 .into_iter()
                 .map(u5c::watch::watch_tx_response::Action::Apply)
                 .map(|x| u5c::watch::WatchTxResponse { action: Some(x) })
@@ -257,7 +289,7 @@ fn roll_to_watch_response<C: LedgerContext + Domain>(
         }
         TipEvent::Undo(point, block) => {
             let wal_inputs = wal_inputs_for(domain, point);
-            block_to_txs(block, mapper, request, &wal_inputs)
+            block_to_txs(block, mapper, request, domain, &wal_inputs)
                 .into_iter()
                 .map(u5c::watch::watch_tx_response::Action::Undo)
                 .map(|x| u5c::watch::WatchTxResponse { action: Some(x) })
@@ -318,11 +350,8 @@ where
             .collect::<Vec<ChainPoint>>();
 
         // ChainStream::start now takes (domain, intersect, cancel) — 3 args.
-        let stream = ChainStream::start::<D, C>(
-            self.domain.clone(),
-            intersect,
-            self.cancel.clone(),
-        );
+        let stream =
+            ChainStream::start::<D, C>(self.domain.clone(), intersect, self.cancel.clone());
 
         let mapper = self.mapper.clone();
         let domain = self.domain.clone();
