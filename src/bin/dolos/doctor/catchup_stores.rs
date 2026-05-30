@@ -34,16 +34,37 @@ pub fn run(config: &RootConfig, args: &Args, feedback: &Feedback) -> miette::Res
         .wal
         .iter_blocks(None, None)
         .into_diagnostic()
-        .context("iterating over wal blocks")?;
+        .context("iterating over wal blocks")?
+        // skip empty WAL entries (origin marker) — these can't be decoded/imported
+        .filter(|(point, body)| {
+            if body.is_empty() {
+                tracing::warn!(slot = point.slot(), "skipping empty WAL block");
+                false
+            } else {
+                true
+            }
+        });
 
     for chunk in remaining.chunks(args.chunk).into_iter() {
-        let collected = chunk.into_iter().map(|(_, x)| x).collect_vec();
+        // collect the chunk into a vector so we can report slot range on error
+        let chunk_vec: Vec<_> = chunk.into_iter().collect();
 
-        let Ok(cursor) = domain.import_blocks(collected) else {
-            miette::bail!("failed to apply block chunk");
-        };
+        let first_slot = chunk_vec.first().map(|(p, _)| p.slot());
+        let last_slot = chunk_vec.last().map(|(p, _)| p.slot());
 
-        progress.set_position(cursor);
+        let collected = chunk_vec.iter().map(|(_, x)| x.clone()).collect_vec();
+
+        match domain.import_blocks(collected) {
+            Ok(cursor) => progress.set_position(cursor),
+            Err(e) => {
+                let start = first_slot.map(|s: u64| s.to_string()).unwrap_or_else(|| "?".into());
+                let end = last_slot.map(|s: u64| s.to_string()).unwrap_or_else(|| "?".into());
+
+                miette::bail!(format!(
+                    "failed to apply block chunk (slots {start}-{end}): {e}"
+                ));
+            }
+        }
     }
 
     Ok(())

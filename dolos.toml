@@ -1,0 +1,39 @@
+[upstream]
+peer_address = "localhost:37021"
+network_magic = 42
+is_testnet = true
+
+[storage]
+version = "v3"
+path = "data"
+
+[storage.wal]
+backend = "redb"
+max_history = 10000
+
+[genesis]
+type = "inline"
+
+byron_path = "/home/adrian/cardano/cardano-src/cardano-node/testnet/byron-genesis.json"
+shelley_path = "/home/adrian/cardano/cardano-src/cardano-node/testnet/shelley-genesis.json"
+alonzo_path = "/home/adrian/cardano/cardano-src/cardano-node/testnet/alonzo-genesis.json"
+conway_path = "/home/adrian/cardano/cardano-src/cardano-node/testnet/conway-genesis.json"
+force_protocol = 9
+
+[sync]
+pull_batch_size = 100
+
+[submit]
+prune_height = 200
+
+[serve.minibf]
+listen_address = "[::]:3000"
+base_path ="/api/v0"
+# map your private network magic -> genesis hash
+hardcoded_network = { magic = 42, genesis_hash = "f6780050fa9fa349451aff3ec1e828e0a26f10f545a7b31d83753ac453af9784" }
+
+[logging]
+max_level = "DEBUG"
+include_pallas = false
+include_grpc = false
+include_minibf = true

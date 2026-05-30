@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -39,14 +40,13 @@ where
     let (raw, order) = domain.get_block_by_tx_hash(&hash).await?;
 
     let chain = domain.get_chain_summary()?;
-
+    let block = pallas::ledger::traverse::MultiEraBlock::decode(&raw)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut builder = TxModelBuilder::new(&raw, order)?
         .with_chain(chain)
-        .with_historical_pparams::<D>(&domain)?;
-
+        .with_historical_pparams::<D>(&domain, &block)?;
     builder.compute_deposit(&domain)?;
-
-    builder.into_response()
+    Ok(Json(builder.into_model()?))
 }
 
 pub async fn by_hash_cbor<D>(
@@ -146,12 +146,12 @@ where
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let (raw, order) = domain.get_block_by_tx_hash(&hash).await?;
-
     let chain = domain.get_chain_summary()?;
-
-    let mut builder = TxModelBuilder::new(&raw, order)?
-        .with_chain(chain)
-        .with_historical_pparams::<D>(&domain)?;
+    let block = pallas::ledger::traverse::MultiEraBlock::decode(&raw)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let builder = TxModelBuilder::new(&raw, order)?
+        .with_chain(chain);
+    let mut builder = builder.with_historical_pparams::<D>(&domain, &block)?;
 
     let deps = builder.required_deps()?;
     let deps = domain.get_tx_batch(deps).await?;

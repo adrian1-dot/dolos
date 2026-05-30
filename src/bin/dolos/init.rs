@@ -35,9 +35,9 @@ impl KnownNetwork {
 
     pub fn from_magic(magic: u64) -> Option<Self> {
         match magic {
-            764824073 => Some(KnownNetwork::CardanoMainnet),
-            1 => Some(KnownNetwork::CardanoPreProd),
-            2 => Some(KnownNetwork::CardanoPreview),
+            dolos_core::MAINNET_MAGIC => Some(KnownNetwork::CardanoMainnet),
+            dolos_core::PREPROD_MAGIC => Some(KnownNetwork::CardanoPreProd),
+            dolos_core::PREVIEW_MAGIC => Some(KnownNetwork::CardanoPreview),
             _ => None,
         }
     }
@@ -90,17 +90,17 @@ impl From<&KnownNetwork> for PeerConfig {
         match value {
             KnownNetwork::CardanoMainnet => PeerConfig {
                 peer_address: "backbone.mainnet.cardanofoundation.org:3001".into(),
-                network_magic: 764824073,
+                network_magic: dolos_core::MAINNET_MAGIC,
                 is_testnet: false,
             },
             KnownNetwork::CardanoPreProd => PeerConfig {
                 peer_address: "preprod-node.world.dev.cardano.org:30000".into(),
-                network_magic: 1,
+                network_magic: dolos_core::PREPROD_MAGIC,
                 is_testnet: true,
             },
             KnownNetwork::CardanoPreview => PeerConfig {
                 peer_address: "preview-node.world.dev.cardano.org:30002".into(),
-                network_magic: 2,
+                network_magic: dolos_core::PREVIEW_MAGIC,
                 is_testnet: true,
             },
         }
@@ -329,6 +329,7 @@ impl ConfigEditor {
                     token_registry_url: None,
                     url: None,
                     base_path: None,
+                    hardcoded_network: None,
                 }
                 .into();
             } else {

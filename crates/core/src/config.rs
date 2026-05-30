@@ -564,6 +564,14 @@ pub struct GrpcConfig {
 }
 
 #[derive(Deserialize, Serialize, Clone)]
+pub struct HardcodedNetwork {
+    /// Cardano network magic (e.g. 764824073, 1, 2, ...)
+    pub magic: u64,
+    /// Hex-encoded genesis hash for this network
+    pub genesis_hash: String,
+}
+
+#[derive(Deserialize, Serialize, Clone)]
 pub struct MinibfConfig {
     pub listen_address: SocketAddr,
     pub permissive_cors: Option<bool>,
@@ -573,6 +581,12 @@ pub struct MinibfConfig {
     /// When set, all API routes will be nested under this path, while /health and /metrics remain at root.
     /// Set to "/api/v0" for full Blockfrost OpenAPI specification compliance.
     pub base_path: Option<String>,
+
+    /// Optional user-provided hardcoded network mapping (single entry).
+    /// Maps a network magic to a hex-encoded genesis hash and is used by minibf
+    /// to report a stable `genesis_hash` for private/test networks.
+    #[serde(default)]
+    pub hardcoded_network: Option<HardcodedNetwork>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]

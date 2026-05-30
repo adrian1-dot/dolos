@@ -66,7 +66,7 @@ fn test_mainnet_upstream() {
         },
         &PeerConfig {
             peer_address: "relays-new.cardano-mainnet.iohk.io:3001".into(),
-            network_magic: 764824073,
+            network_magic: dolos_core::MAINNET_MAGIC,
             is_testnet: false,
         },
         wal,

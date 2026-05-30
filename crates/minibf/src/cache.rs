@@ -80,6 +80,23 @@ impl CacheService {
         }
     }
 
+    /// Invalidate the cached entry for type `T` (if present).
+    ///
+    /// This removes the entry from the internal map so subsequent calls will
+    /// re-run the fetcher synchronously and return fresh data.
+    pub async fn invalidate<T: Send + Sync + 'static>(&self) {
+        use std::any::TypeId;
+
+        let mut map = self.map.write().await;
+        map.remove(&TypeId::of::<T>());
+    }
+
+    /// Invalidate all cached entries.
+    pub async fn invalidate_all(&self) {
+        let mut map = self.map.write().await;
+        map.clear();
+    }
+
     /// Checks if there's a fresh cached value (within TTL).
     fn get_fresh_value<T: Clone>(
         guard: &tokio::sync::MutexGuard<'_, Entry<T>>,
@@ -291,5 +308,25 @@ mod tests {
             .await;
         assert_eq!(res.unwrap(), "updated");
         assert_eq!(counter.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_invalidate_entry() {
+        let cache = CacheService::default();
+        let ttl = Duration::from_secs(60);
+
+        // initial fetch -> "first"
+        let res: Result<String, CacheError<()>> = cache
+            .get_or_fetch_blocking(ttl, || Ok("first".to_string()))
+            .await;
+        assert_eq!(res.unwrap(), "first");
+
+        // invalidate the String entry and ensure a new fetcher runs
+        cache.invalidate::<String>().await;
+
+        let res: Result<String, CacheError<()>> = cache
+            .get_or_fetch_blocking(ttl, || Ok("second".to_string()))
+            .await;
+        assert_eq!(res.unwrap(), "second");
     }
 }

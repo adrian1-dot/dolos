@@ -65,9 +65,25 @@ pub fn run(config: &RootConfig, _args: &Args) -> miette::Result<()> {
             .global_pb
             .set_message(format!("checking block {hash:?}"));
 
-        let blockd = MultiEraBlock::decode(&body)
-            .into_diagnostic()
-            .context("decoding blocks")?;
+        // Show the slot being checked (helps debugging noisy progress-bar output)
+        println!("checking slot {} (hash {:?}, size={})", slot, hash, body.len());
+
+        // Skip empty WAL entries (origin/placeholder) — these are not real blocks
+        if body.is_empty() {
+            tracing::warn!(slot = slot, "skipping empty WAL block (origin/placeholder)");
+            feedback.global_pb.set_position(slot);
+            last_hash = Some(hash);
+            continue;
+        }
+
+        // Attempt to decode the block and provide slot-aware diagnostics on error
+        let blockd = match MultiEraBlock::decode(&body) {
+            Ok(b) => b,
+            Err(err) => {
+                eprintln!("WAL decode error at slot {}: {}", slot, err);
+                return Err(miette::miette!(format!("decoding blocks at slot {}: {}", slot, err)));
+            }
+        };
 
         if let Some(last) = last_hash {
             let previous = blockd.header().previous_hash();

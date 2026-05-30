@@ -141,6 +141,16 @@ impl ToyDomain {
 
         domain.bootstrap().unwrap();
 
+        // Ensure the state cursor is initialized after genesis so helpers that
+        // rely on `state.read_cursor()` (and `Facade::get_tip_slot`) don't
+        // return `None`/500 for freshly-bootstrapped ToyDomains used in tests.
+        // Persist `ChainPoint::Origin` as the canonical initial cursor.
+        {
+            let writer = domain.state.start_writer().unwrap();
+            writer.set_cursor(dolos_core::ChainPoint::Origin).unwrap();
+            writer.commit().unwrap();
+        }
+
         if let Some(delta) = initial_delta {
             let writer = domain.state.start_writer().unwrap();
             let index_writer = domain.indexes.start_writer().unwrap();

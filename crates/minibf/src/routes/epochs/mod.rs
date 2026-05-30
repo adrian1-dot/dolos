@@ -21,14 +21,38 @@ pub mod mapping;
 pub async fn latest_parameters<D: Domain>(
     State(domain): State<Facade<D>>,
 ) -> Result<Json<EpochParamContent>, Error> {
-    let tip = domain.get_tip_slot()?;
+    eprintln!("latest_parameters: handler start");
 
-    let summary = domain.get_chain_summary()?;
+    let tip = match domain.get_tip_slot() {
+        Ok(t) => { eprintln!("latest_parameters: tip={} (ok)", t); t }
+        Err(e) => {
+            eprintln!("latest_parameters: get_tip_slot -> {:?}", e);
+            return Err(Error::Code(e));
+        }
+    };
+
+    let summary = match domain.get_chain_summary() {
+        Ok(s) => { eprintln!("latest_parameters: got chain_summary"); s }
+        Err(e) => {
+            eprintln!("latest_parameters: get_chain_summary -> {:?}", e);
+            return Err(Error::Code(e));
+        }
+    };
+
+    eprintln!("latest_parameters: summary.start_slot={}", summary.epoch_start(0));
 
     let (epoch, _) = summary.slot_epoch(tip);
+    eprintln!("latest_parameters: computed epoch from tip = {}", epoch);
 
-    let state = dolos_cardano::load_epoch::<D>(domain.state())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let state = match dolos_cardano::load_epoch::<D>(domain.state()) {
+        Ok(s) => { eprintln!("latest_parameters: load_epoch ok"); s }
+        Err(e) => {
+            eprintln!("latest_parameters: load_epoch -> {:?}", e);
+            return Err(Error::Code(StatusCode::INTERNAL_SERVER_ERROR));
+        }
+    };
+
+    eprintln!("latest_parameters: pparams present? {}", state.pparams.live().is_some());
 
     let model = mapping::ParametersModelBuilder {
         epoch,
@@ -37,7 +61,18 @@ pub async fn latest_parameters<D: Domain>(
         nonce: state.nonces.map(|x| x.active.to_string()),
     };
 
-    Ok(model.into_response()?)
+    eprintln!("latest_parameters: building model -> attempting into_response");
+
+    match model.into_response() {
+        Ok(json) => {
+            eprintln!("latest_parameters: model.into_response ok");
+            Ok(json)
+        }
+        Err(e) => {
+            eprintln!("latest_parameters: model.into_response -> {:?}", e);
+            Err(Error::Code(e))
+        }
+    }
 }
 
 pub async fn by_number_parameters<D: Domain>(

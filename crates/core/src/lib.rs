@@ -76,6 +76,18 @@ pub type UtxoBody = (u16, Cbor);
 pub type ChainTip = pallas::network::miniprotocols::chainsync::Tip;
 pub type LogSeq = u64;
 
+/// Well-known Cardano network magic numbers.
+/// Use these constants instead of numeric literals to avoid duplication
+/// and make intent explicit across the codebase.
+pub const MAINNET_MAGIC: u64 = 764824073;
+pub const PREPROD_MAGIC: u64 = 1;
+pub const PREVIEW_MAGIC: u64 = 2;
+
+// `u32` typed aliases for places that store network magic as `u32` (e.g. genesis)
+pub const MAINNET_MAGIC_U32: u32 = MAINNET_MAGIC as u32;
+pub const PREPROD_MAGIC_U32: u32 = PREPROD_MAGIC as u32;
+pub const PREVIEW_MAGIC_U32: u32 = PREVIEW_MAGIC as u32;
+
 pub use archive::*;
 pub use async_query::*;
 pub use indexes::*;

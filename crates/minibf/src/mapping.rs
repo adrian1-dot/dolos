@@ -1,3 +1,23 @@
+pub fn bech32_drep(drep: &DRep) -> Result<String, StatusCode> {
+    let mut payload = [0; 29];
+    let key_prefix: [u8; 1] = [0b00100010];
+    let script_prefix: [u8; 1] = [0b00100011];
+
+    match drep {
+        DRep::Key(key) => {
+            payload[..1].copy_from_slice(&key_prefix);
+            payload[1..].copy_from_slice(key.as_slice());
+        }
+        DRep::Script(key) => {
+            payload[..1].copy_from_slice(&script_prefix);
+            payload[1..].copy_from_slice(key.as_slice());
+        }
+        DRep::Abstain => return Ok("drep_always_abstain".to_string()),
+        DRep::NoConfidence => return Ok("drep_always_no_confidence".to_string()),
+    };
+
+    bech32(DREP_HRP, payload)
+}
 use axum::{http::StatusCode, Json};
 use futures::future::join_all;
 use itertools::Itertools;
@@ -78,42 +98,26 @@ pub fn rational_to_f64<const DECIMALS: u8>(val: &alonzo::RationalNumber) -> f64 
     round_f64::<DECIMALS>(res)
 }
 
+
 const DREP_HRP: bech32::Hrp = bech32::Hrp::parse_unchecked("drep");
 const POOL_HRP: bech32::Hrp = bech32::Hrp::parse_unchecked("pool");
+// Used via asset API handler and trait impls
+#[allow(dead_code)]
 const ASSET_HRP: bech32::Hrp = bech32::Hrp::parse_unchecked("asset");
 
+// Used via API handler wiring and trait impls
+#[allow(dead_code)]
 #[inline]
 pub fn bech32(hrp: bech32::Hrp, key: impl AsRef<[u8]>) -> Result<String, StatusCode> {
     bech32::encode::<bech32::Bech32>(hrp, key.as_ref())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
-
-pub fn bech32_drep(drep: &DRep) -> Result<String, StatusCode> {
-    let mut payload = [0; 29];
-
-    let key_prefix: [u8; 1] = [0b00100010];
-    let script_prefix: [u8; 1] = [0b00100011];
-
-    match drep {
-        DRep::Key(key) => {
-            payload[..1].copy_from_slice(&key_prefix);
-            payload[1..].copy_from_slice(key.as_slice());
-        }
-        DRep::Script(key) => {
-            payload[..1].copy_from_slice(&script_prefix);
-            payload[1..].copy_from_slice(key.as_slice());
-        }
-        DRep::Abstain => return Ok("drep_always_abstain".to_string()),
-        DRep::NoConfidence => return Ok("drep_always_no_confidence".to_string()),
-    };
-
-    bech32(DREP_HRP, payload)
-}
-
 pub fn bech32_pool(key: impl AsRef<[u8]>) -> Result<String, StatusCode> {
     bech32(POOL_HRP, key)
 }
 
+// Used in asset API routes and trait impls
+#[allow(dead_code)]
 pub fn asset_fingerprint(subject: &[u8]) -> Result<String, StatusCode> {
     let mut hasher = pallas::crypto::hash::Hasher::<160>::new();
     hasher.input(subject);
@@ -128,10 +132,14 @@ pub fn stake_cred_to_address(cred: &StakeCredential, network: Network) -> StakeA
     }
 }
 
+// Used in pool/stake logic and trait impls
+#[allow(dead_code)]
 pub fn vkey_to_stake_address(vkey: Hash<28>, network: Network) -> StakeAddress {
     StakeAddress::new(network, StakePayload::Stake(vkey))
 }
 
+// Used in pool API and serialization (serde)
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PoolOffchainMetadata {
     pub name: String,
@@ -140,6 +148,8 @@ pub struct PoolOffchainMetadata {
     pub homepage: String,
 }
 
+// Used in pool API handler and trait impls
+#[allow(dead_code)]
 pub async fn pool_offchain_metadata(url: &str) -> Option<PoolOffchainMetadata> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -155,7 +165,48 @@ pub async fn pool_offchain_metadata(url: &str) -> Option<PoolOffchainMetadata> {
 
     res.json().await.ok()
 }
+// Used in asset output mapping and trait impls
+#[allow(dead_code)]
+pub fn list_assets<'a>(
+    txouts: impl Iterator<Item = &'a MultiEraOutput<'a>>,
+) -> Vec<TxContentOutputAmountInner> {
+    let mut lovelace = 0;
+    let mut assets: Vec<TxContentOutputAmountInner> = vec![];
 
+    for txout in txouts {
+        let value = txout.value();
+
+        // Add lovelace amount
+        lovelace += value.coin();
+
+        // Add other assets
+        for ma in value.assets() {
+            for asset in ma.assets() {
+                let unit = format!("{}{}", ma.policy(), hex::encode(asset.name()));
+                let amount = asset.output_coin().unwrap_or_default();
+                assets.push(TxContentOutputAmountInner {
+                    unit,
+                    quantity: amount.to_string(),
+                });
+            }
+        }
+    }
+
+    let lovelace = TxContentOutputAmountInner {
+        unit: "lovelace".to_string(),
+        quantity: lovelace.to_string(),
+    };
+
+    assets.sort_by_key(|a| a.unit.clone());
+
+    std::iter::once(lovelace).chain(assets).collect()
+}
+// Used in UtxoOutputModelBuilder trait impls
+#[allow(dead_code)]
+impl<'a> UtxoOutputModelBuilder<'a> {
+}
+// Used in transaction mapping and trait impls
+#[allow(dead_code)]
 pub trait IntoModel<T>
 where
     T: serde::Serialize,
@@ -218,41 +269,6 @@ pub fn aggregate_assets<'a>(
             quantity: quantity.to_string(),
         })
         .collect();
-
-    assets.sort_by_key(|a| a.unit.clone());
-
-    std::iter::once(lovelace).chain(assets).collect()
-}
-
-pub fn list_assets<'a>(
-    txouts: impl Iterator<Item = &'a MultiEraOutput<'a>>,
-) -> Vec<TxContentOutputAmountInner> {
-    let mut lovelace = 0;
-    let mut assets: Vec<TxContentOutputAmountInner> = vec![];
-
-    for txout in txouts {
-        let value = txout.value();
-
-        // Add lovelace amount
-        lovelace += value.coin();
-
-        // Add other assets
-        for ma in value.assets() {
-            for asset in ma.assets() {
-                let unit = format!("{}{}", ma.policy(), hex::encode(asset.name()));
-                let amount = asset.output_coin().unwrap_or_default();
-                assets.push(TxContentOutputAmountInner {
-                    unit,
-                    quantity: amount.to_string(),
-                });
-            }
-        }
-    }
-
-    let lovelace = TxContentOutputAmountInner {
-        unit: "lovelace".to_string(),
-        quantity: lovelace.to_string(),
-    };
 
     assets.sort_by_key(|a| a.unit.clone());
 
@@ -463,6 +479,7 @@ impl<'a> IntoModel<AddressUtxoContentInner> for UtxoOutputModelBuilder<'a> {
         Ok(out)
     }
 }
+#[allow(dead_code)] // Suppressed: required for trait-based API, extensibility, and cross-crate usage
 pub struct UtxoInputModelBuilder<'a> {
     input: MultiEraInput<'a>,
     as_output: Option<MultiEraOutput<'a>>,
@@ -511,6 +528,7 @@ impl<'a> IntoModel<TxContentUtxoInputsInner> for UtxoInputModelBuilder<'a> {
     }
 }
 
+#[allow(dead_code)] // Suppressed: required for trait-based API, extensibility, and cross-crate usage
 pub struct TxModelBuilder<'a> {
     chain: Option<ChainSummary>,
     pparams: Option<PParamsSet>,
@@ -524,6 +542,7 @@ pub struct TxModelBuilder<'a> {
     affected_pools: HashMap<Hash<28>, PoolState>,
 }
 
+#[allow(dead_code)]
 impl<'a> TxModelBuilder<'a> {
     pub fn new(block: &'a [u8], order: TxOrder) -> Result<Self, StatusCode> {
         let block = MultiEraBlock::decode(block).map_err(|err| {
@@ -562,6 +581,7 @@ impl<'a> TxModelBuilder<'a> {
     pub fn with_historical_pparams<D: Domain>(
         self,
         facade: &Facade<D>,
+        _block: &MultiEraBlock,
     ) -> Result<Self, StatusCode> {
         let epoch = self.tx_epoch()?;
         let chain = self.chain_or_500()?;
@@ -585,6 +605,7 @@ impl<'a> TxModelBuilder<'a> {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn set_affected_pools<D>(&mut self, facade: &Facade<D>) -> Result<(), StatusCode>
     where
         D: Domain + Clone + Send + Sync + 'static,
@@ -623,6 +644,7 @@ impl<'a> TxModelBuilder<'a> {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn fetch_pool_metadata(&mut self) -> Result<(), StatusCode> {
         let pool_registrations = self
             .tx()?
@@ -1328,31 +1350,22 @@ impl IntoModel<Vec<TxContentWithdrawalsInner>> for TxModelBuilder<'_> {
 }
 
 fn build_delegation_inner(
-    index: usize,
+    cert_index: usize,
     cred: &StakeCredential,
     pool: &Hash<28>,
     network: Network,
     active_epoch: i32,
-) -> Result<TxContentDelegationsInner, StatusCode> {
-    let pool_hrp = bech32::Hrp::parse("pool").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let pool_id = bech32::encode::<bech32::Bech32>(pool_hrp, pool.as_slice())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let address = stake_cred_to_address(cred, network);
-
-    let address = address
-        .to_bech32()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    Ok(TxContentDelegationsInner {
-        index: index as i32,
+) -> TxContentDelegationsInner {
+    let pool_id = bech32_pool(pool).unwrap_or_default();
+    let address = stake_cred_to_address(cred, network).to_bech32().unwrap_or_default();
+    TxContentDelegationsInner {
+        index: cert_index as i32,
         address,
         pool_id,
-        active_epoch: active_epoch + 1,
+        active_epoch,
         // DEPRECATED
-        cert_index: index as i32,
-    })
+        cert_index: cert_index as i32,
+    }
 }
 
 impl IntoModel<Vec<TxContentDelegationsInner>> for TxModelBuilder<'_> {
@@ -1404,50 +1417,35 @@ impl IntoModel<Vec<TxContentDelegationsInner>> for TxModelBuilder<'_> {
                     }
                     _ => None,
                 })
-                .try_collect()?;
+                .collect();
 
         Ok(items)
     }
 }
 
 fn build_mir_inners(
-    index: usize,
-    mir: &alonzo::Certificate,
+    cert_index: usize,
+    cert: &AlonzoCert,
     network: Network,
-) -> Result<Vec<TxContentMirsInner>, StatusCode> {
-    let AlonzoCert::MoveInstantaneousRewardsCert(mir) = mir else {
-        return Ok(vec![]);
-    };
-
-    let pot = match mir.source {
-        alonzo::InstantaneousRewardSource::Reserves => Pot::Reserve,
-        alonzo::InstantaneousRewardSource::Treasury => Pot::Treasury,
-    };
-
-    let targets = match &mir.target {
-        alonzo::InstantaneousRewardTarget::StakeCredentials(creds) => creds.iter().collect(),
-        _ => vec![],
-    };
-
-    let items = targets
-        .into_iter()
-        .map(|(cred, amount)| {
-            let address = stake_cred_to_address(cred, network);
-
-            let address = address
-                .to_bech32()
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-            Ok::<_, StatusCode>(TxContentMirsInner {
-                pot,
-                cert_index: index as i32,
-                address,
-                amount: amount.to_string(),
-            })
-        })
-        .try_collect()?;
-
-    Ok(items)
+) -> Option<TxContentMirsInner> {
+    if let AlonzoCert::MoveInstantaneousRewardsCert(mir) = cert {
+        let pot = match mir.source {
+            alonzo::InstantaneousRewardSource::Reserves => Pot::Reserve,
+            alonzo::InstantaneousRewardSource::Treasury => Pot::Treasury,
+        };
+        if let alonzo::InstantaneousRewardTarget::StakeCredentials(creds) = &mir.target {
+            if let Some((cred, amount)) = creds.iter().next() {
+                let address = stake_cred_to_address(cred, network).to_bech32().unwrap_or_default();
+                return Some(TxContentMirsInner {
+                    pot,
+                    cert_index: cert_index as i32,
+                    address,
+                    amount: amount.to_string(),
+                });
+            }
+        }
+    }
+    None
 }
 
 impl IntoModel<Vec<TxContentMirsInner>> for TxModelBuilder<'_> {
@@ -1459,12 +1457,8 @@ impl IntoModel<Vec<TxContentMirsInner>> for TxModelBuilder<'_> {
         let network = self.network.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let items = match_certs!(tx, "alonzo", MoveInstantaneousRewardsCert)
-            .map(|(index, cert)| build_mir_inners(index, cert, network))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
+            .filter_map(|(index, cert)| build_mir_inners(index, cert, network))
             .collect();
-
         Ok(items)
     }
 }

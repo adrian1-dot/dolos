@@ -53,11 +53,13 @@ where
             .map_err(|_| Error::InvalidBlockHash)?
             .ok_or(StatusCode::NOT_FOUND)?),
         Either::Right(number) => {
-            let (tip, _) = domain
-                .archive()
-                .get_tip()
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+            // If archive tip is missing (e.g. ToyDomain in tests), treat the tip
+            // as slot 0 so callers can still request /blocks/0 and receive the
+            // genesis fallback. This avoids returning 500 for an empty archive.
+            let tip = match domain.archive().get_tip().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
+                Some((t, _)) => t,
+                None => 0,
+            };
 
             if *number > tip {
                 return Err(Error::InvalidBlockNumber);

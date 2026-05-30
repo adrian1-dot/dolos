@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Deref, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use axum::{
     extract::{Path, Query, State},
@@ -6,13 +6,13 @@ use axum::{
     Json,
 };
 use blockfrost_openapi::models::{
-    asset::{Asset, OnchainMetadataStandard},
+    asset::{Asset},
     asset_addresses_inner::AssetAddressesInner,
     asset_metadata::AssetMetadata as OffchainMetadata,
     asset_transactions_inner::AssetTransactionsInner,
 };
 use dolos_cardano::{
-    cip68::{cip_68_reference_asset, encode_to_hex, parse_cip68_metadata_map, Cip68TokenStandard},
+    cip68::{cip_68_reference_asset, Cip68TokenStandard},
     indexes::{AsyncCardanoQueryExt, CardanoIndexExt, SlotOrder},
     model::AssetState,
     ChainSummary,
@@ -24,9 +24,8 @@ use pallas::{
     codec::minicbor,
     crypto::hash::Hash,
     ledger::{
-        primitives::{BigInt, Metadatum, PlutusData},
+        primitives::{Metadatum, PlutusData},
         traverse::{MultiEraBlock, MultiEraOutput, MultiEraTx},
-        validate::phase2::to_plutus_data::ToPlutusData,
     },
 };
 use serde::Deserialize;
@@ -38,106 +37,6 @@ use crate::{
     Facade,
 };
 
-struct OnchainMetadata {
-    version: Option<OnchainMetadataStandard>,
-    metadata: HashMap<String, serde_json::Value>,
-    extra: Option<String>,
-}
-impl OnchainMetadata {
-    fn from_plutus_data(
-        plutus_data: PlutusData,
-        standard: Cip68TokenStandard,
-    ) -> Result<Option<Self>, StatusCode> {
-        let PlutusData::Constr(constr) = plutus_data else {
-            return Ok(None);
-        };
-
-        if constr.fields.len() < 2 {
-            return Ok(None);
-        }
-
-        let PlutusData::Map(map) = &constr.fields[0] else {
-            return Ok(None);
-        };
-
-        let version = match &constr.fields[1] {
-            PlutusData::BigInt(BigInt::Int(int)) => i64::try_from(*int.deref()).ok(),
-            _ => None,
-        };
-
-        let Some(version) = version else {
-            return Ok(None);
-        };
-
-        let metadata = parse_cip68_metadata_map(map.as_slice(), standard)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        let version = match version {
-            1 => Some(OnchainMetadataStandard::Cip68v1),
-            2 => Some(OnchainMetadataStandard::Cip68v2),
-            3 => Some(OnchainMetadataStandard::Cip68v3),
-            _ => None,
-        };
-
-        let extra = constr
-            .fields
-            .get(2)
-            .map(encode_to_hex)
-            .transpose()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        Ok(Some(Self {
-            metadata,
-            version,
-            extra,
-        }))
-    }
-
-    fn from_metadatum(unit: &str, metadatum: Metadatum) -> Result<Option<Self>, StatusCode> {
-        let value = CIP25Metadata(metadatum).into_model()?;
-
-        let (metadata, version) = match value {
-            serde_json::Value::Object(map) => {
-                let policy_id = &unit[..56];
-                let asset_name_raw = &unit[56..];
-
-                let asset_name = hex::decode(asset_name_raw)
-                    .ok()
-                    .and_then(|v| String::from_utf8(v).ok())
-                    .unwrap_or_else(|| asset_name_raw.to_string());
-
-                let metadata = map
-                    .get(policy_id)
-                    .and_then(|policy_metadata| policy_metadata.get(&asset_name))
-                    .and_then(|asset_metadata| asset_metadata.as_object())
-                    .map(|obj| obj.clone().into_iter().collect())
-                    .unwrap_or_default();
-
-                let version = map.get("version").and_then(|v| match v {
-                    serde_json::Value::Number(num) => num.as_i64(),
-                    serde_json::Value::String(s) => s.parse::<f64>().ok().map(|f| f as i64),
-                    _ => None,
-                });
-
-                (metadata, version)
-            }
-            _ => (HashMap::new(), None),
-        };
-
-        let version = Some(match version {
-            Some(2) => OnchainMetadataStandard::Cip25v2,
-            _ => OnchainMetadataStandard::Cip25v1,
-        });
-
-        let extra = None;
-
-        Ok(Some(Self {
-            metadata,
-            version,
-            extra,
-        }))
-    }
-}
 
 #[derive(Debug, Deserialize)]
 pub struct TokenRegistryValue<T> {
@@ -173,6 +72,7 @@ impl From<TokenRegistryMetadata> for OffchainMetadata {
     }
 }
 
+#[allow(dead_code)]
 struct CIP25Metadata(Metadatum);
 impl IntoModel<serde_json::Value> for CIP25Metadata {
     type SortKey = ();
@@ -211,6 +111,7 @@ impl IntoModel<serde_json::Value> for CIP25Metadata {
     }
 }
 
+#[allow(dead_code)]
 async fn datum_from_hash<D>(
     domain: &Facade<D>,
     hash: Hash<32>,
@@ -231,6 +132,7 @@ where
     Ok(Some(datum))
 }
 
+#[allow(dead_code)]
 fn cip68_reference_from_unit(
     unit: &str,
 ) -> Result<Option<(String, Cip68TokenStandard)>, StatusCode> {
@@ -243,59 +145,15 @@ fn cip68_reference_from_unit(
     cip_68_reference_asset(policy_id, asset_name).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+#[allow(dead_code)]
 fn decode_era_tx(era: u16, cbor: &[u8]) -> Result<MultiEraTx<'_>, StatusCode> {
     let era = pallas::ledger::traverse::Era::try_from(era)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     MultiEraTx::decode_for_era(era, cbor).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-async fn metadata_from_datum_option<D>(
-    domain: &Facade<D>,
-    datum_option: &pallas::ledger::primitives::conway::DatumOption<'_>,
-    standard: Cip68TokenStandard,
-) -> Result<Option<OnchainMetadata>, StatusCode>
-where
-    D: Domain + Clone + Send + Sync + 'static,
-{
-    match datum_option {
-        pallas::ledger::primitives::conway::DatumOption::Hash(hash) => {
-            let Some(plutus_data) = datum_from_hash(domain, *hash).await? else {
-                return Ok(None);
-            };
-            OnchainMetadata::from_plutus_data(plutus_data, standard)
-        }
-        pallas::ledger::primitives::conway::DatumOption::Data(cbor_wrap) => {
-            OnchainMetadata::from_plutus_data(cbor_wrap.to_plutus_data(), standard)
-        }
-    }
-}
 
-async fn last_cip68_metadata_from_tx<D>(
-    domain: &Facade<D>,
-    tx: &MultiEraTx<'_>,
-    ref_asset_bytes: &[u8],
-    standard: Cip68TokenStandard,
-) -> Result<Option<OnchainMetadata>, StatusCode>
-where
-    D: Domain + Clone + Send + Sync + 'static,
-{
-    let mut last_metadata = None;
-
-    for output in tx.outputs().iter() {
-        if !output_has_subject(ref_asset_bytes, output) {
-            continue;
-        }
-
-        if let Some(datum_option) = output.datum() {
-            if let Some(out) = metadata_from_datum_option(domain, &datum_option, standard).await? {
-                last_metadata = Some(out);
-            }
-        }
-    }
-
-    Ok(last_metadata)
-}
-
+#[allow(dead_code)]
 struct AssetModelBuilder {
     subject: Vec<u8>,
     unit: String,
@@ -305,70 +163,7 @@ struct AssetModelBuilder {
 }
 
 impl AssetModelBuilder {
-    async fn onchain_metadata<D>(
-        &self,
-        domain: &Facade<D>,
-    ) -> Result<Option<OnchainMetadata>, StatusCode>
-    where
-        D: Domain + Clone + Send + Sync + 'static,
-        Option<AssetState>: From<D::Entity>,
-    {
-        let cip68_reference = match cip68_reference_from_unit(&self.unit)? {
-            Some((ref_asset, standard)) => {
-                let bytes =
-                    hex::decode(&ref_asset).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-                Some((ref_asset, standard, bytes))
-            }
-            None => None,
-        };
-
-        if let Some((_, standard, ref_asset_bytes)) = &cip68_reference {
-            let entity_key = pallas::crypto::hash::Hasher::<256>::hash(ref_asset_bytes.as_slice());
-            let ref_state = domain
-                .read_cardano_entity::<AssetState>(entity_key.as_slice())
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-            if let Some(metadata_tx) = ref_state.and_then(|state| state.metadata_tx) {
-                if let Some(EraCbor(era, cbor)) = domain
-                    .query()
-                    .tx_cbor(metadata_tx.as_slice().to_vec())
-                    .await
-                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-                {
-                    let tx = decode_era_tx(era, &cbor)?;
-                    if let Some(metadata) =
-                        last_cip68_metadata_from_tx(domain, &tx, ref_asset_bytes, *standard).await?
-                    {
-                        return Ok(Some(metadata));
-                    }
-                }
-            }
-        }
-
-        if let Some(EraCbor(era, cbor)) = &self.initial_tx {
-            let tx = decode_era_tx(*era, cbor)?;
-
-            if let Some((_, standard, ref_asset_bytes)) = &cip68_reference {
-                if let Some(metadata) =
-                    last_cip68_metadata_from_tx(domain, &tx, ref_asset_bytes, *standard).await?
-                {
-                    return Ok(Some(metadata));
-                }
-            }
-
-            let out = tx
-                .metadata()
-                .find(721)
-                .map(|metadatum| OnchainMetadata::from_metadatum(&self.unit, metadatum.clone()))
-                .transpose()?
-                .flatten();
-
-            return Ok(out);
-        }
-
-        Ok(None)
-    }
-
+    #[allow(dead_code)]
     async fn offchain_metadata(&self, asset: &str) -> Result<Option<OffchainMetadata>, StatusCode> {
         // TODO: apply memory cache
         let Some(url) = &self.registry_url else {
@@ -405,7 +200,8 @@ impl AssetModelBuilder {
         Ok(Some(metadata.into()))
     }
 
-    async fn into_model<D>(self, domain: &Facade<D>) -> Result<Asset, StatusCode>
+    #[allow(dead_code)]
+    async fn into_model<D>(self, _domain: &Facade<D>) -> Result<Asset, StatusCode>
     where
         D: Domain + Clone + Send + Sync + 'static,
         Option<AssetState>: From<D::Entity>,
@@ -413,15 +209,9 @@ impl AssetModelBuilder {
         let policy = self.subject[..28].to_vec();
         let asset = self.subject[28..].to_vec();
 
-        let metadata = self.onchain_metadata(domain).await?;
-
-        let onchain_metadata_standard = Some(metadata.as_ref().and_then(|m| m.version));
-        let onchain_metadata = metadata.as_ref().map(|m| m.metadata.clone());
-        let onchain_metadata_extra = Some(metadata.as_ref().and_then(|m| m.extra.clone()));
-
         let metadata = self.offchain_metadata(&self.unit).await?.map(Box::new);
 
-        let asset_name = hex::encode(asset);
+        let asset_name = hex::encode(&asset);
         let asset_name = (!asset_name.is_empty()).then_some(asset_name);
 
         let out = Asset {
@@ -436,16 +226,17 @@ impl AssetModelBuilder {
                 .map(|h| h.to_string())
                 .unwrap_or_default(),
             mint_or_burn_count: self.asset_state.mint_tx_count as i32,
-            onchain_metadata,
-            onchain_metadata_standard,
-            onchain_metadata_extra,
             metadata,
+            onchain_metadata: None,
+            onchain_metadata_extra: None,
+            onchain_metadata_standard: None,
         };
 
         Ok(out)
     }
 }
 
+#[allow(dead_code)]
 pub async fn by_subject<D>(
     Path(unit): Path<String>,
     State(domain): State<Facade<D>>,
@@ -485,6 +276,7 @@ where
     Ok(Json(model.into_model(&domain).await?))
 }
 
+#[allow(dead_code)]
 pub async fn by_subject_addresses<D>(
     Path(subject): Path<String>,
     Query(params): Query<PaginationParameters>,
@@ -569,10 +361,12 @@ where
     Ok(Json(sorted))
 }
 
+#[allow(dead_code)]
 fn subject_matches(subject: &[u8], policy: &[u8], name: &[u8]) -> bool {
     [policy, name].concat() == subject
 }
 
+#[allow(dead_code)]
 fn output_has_subject(subject: &[u8], output: &MultiEraOutput) -> bool {
     for pa in output.value().assets() {
         for asset in pa.assets() {
@@ -584,6 +378,7 @@ fn output_has_subject(subject: &[u8], output: &MultiEraOutput) -> bool {
     false
 }
 
+#[allow(dead_code)]
 async fn tx_has_subject<D>(
     domain: &Facade<D>,
     subject: &[u8],
@@ -622,6 +417,7 @@ where
     Ok(false)
 }
 
+#[allow(dead_code)]
 async fn find_txs<D>(
     domain: &Facade<D>,
     subject: &[u8],
@@ -658,6 +454,7 @@ where
     Ok(matches)
 }
 
+#[allow(dead_code)]
 pub async fn by_subject_transactions<D>(
     Path(subject): Path<String>,
     Query(params): Query<PaginationParameters>,

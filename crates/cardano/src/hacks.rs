@@ -473,9 +473,9 @@ pub mod proposals {
 
     pub fn outcome(magic: u32, protocol: u16, proposal: &str) -> ProposalOutcome {
         match magic {
-            764824073 => mainnet::outcome(protocol, proposal),
-            1 => preprod::outcome(protocol, proposal),
-            2 => preview::outcome(protocol, proposal),
+            dolos_core::MAINNET_MAGIC_U32 => mainnet::outcome(protocol, proposal),
+            dolos_core::PREPROD_MAGIC_U32 => preprod::outcome(protocol, proposal),
+            dolos_core::PREVIEW_MAGIC_U32 => preview::outcome(protocol, proposal),
             _ => ProposalOutcome::Unknown,
         }
     }
